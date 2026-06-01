@@ -272,7 +272,7 @@ class GomokuAI:
 
     def _build_line(self, board: GomokuBoard, row: int, col: int, dr: int, dc: int, player: int):
         window = [player]
-        # 向两个方向拓展棋子���口
+        # 向两个方向拓展棋子窗口
         for sign in (1, -1):
             r, c = row + sign * dr, col + sign * dc
             while 0 <= r < board.size and 0 <= c < board.size and len(window) < 10:
@@ -324,12 +324,19 @@ def play_gomoku_game():
     board = GomokuBoard(size=15)
     ai = GomokuAI(size=15, time_limit=1.8)
 
-    print("===== 强化版五子棋 AI =====")
+    print("=" * 50)
+    print("       🎮 强化版五子棋 AI 游戏 🎮")
+    print("=" * 50)
     print("规则：你是黑方(X)，AI是白方(O)")
-    print("落子输入格式：行 列 （例如：7 7 代表棋盘中心）\n")
+    print("落子输入格式：行 列 （例如：7 7 代表棋盘中心）")
+    print("输入 'q' 可退出游戏")
+    print("=" * 50)
 
+    move_count = 0
     while True:
         board.print_board()
+        print()
+        
         winner = board.winner()
         if winner == BLACK:
             print("🎉 恭喜！你战胜了AI！")
@@ -344,10 +351,15 @@ def play_gomoku_game():
         # 玩家落子
         while True:
             try:
-                in_str = input("\n请输入落子坐标：")
-                x, y = map(int, in_str.strip().split())
+                in_str = input("\n请输入落子坐标 (或 'q' 退出)：").strip()
+                if in_str.lower() == 'q':
+                    print("感谢游玩！再见！")
+                    return
+                x, y = map(int, in_str.split())
                 if board.is_valid(x, y):
                     board.play(x, y, BLACK)
+                    move_count += 1
+                    print(f"你落子：{x} {y}")
                     break
                 else:
                     print("❌ 坐标无效，请选择空白位置！")
@@ -362,20 +374,60 @@ def play_gomoku_game():
         print("\n🤖 AI 思考中...")
         ai_row, ai_col = ai.best_move(board, WHITE)
         board.play(ai_row, ai_col, WHITE)
+        move_count += 1
         print(f"AI 落子：{ai_row} {ai_col}")
+        print()
 
 
-# 原有示例 + 人机对战双入口
+def run_example() -> None:
+    """运行示例：展示AI在特定局面的推荐走法"""
+    print("\n" + "=" * 50)
+    print("       📊 AI 走法推荐示例 📊")
+    print("=" * 50)
+    board = GomokuBoard(size=15)
+    ai = GomokuAI(size=15, time_limit=1.5)
+    
+    starting_moves = [
+        (7, 7, BLACK),
+        (7, 8, WHITE),
+        (8, 7, BLACK),
+        (8, 8, WHITE),
+    ]
+    
+    print("初始局面：")
+    for row, col, player in starting_moves:
+        board.play(row, col, player)
+    
+    board.print_board()
+    
+    print("\n🤖 AI (黑方) 思考中...")
+    move = ai.best_move(board, BLACK)
+    print(f"AI 推荐走法：{move}\n")
+
+
+# 主菜单
+def main_menu():
+    while True:
+        print("\n" + "=" * 50)
+        print("         五子棋 AI 主菜单")
+        print("=" * 50)
+        print("1. 人机对战")
+        print("2. 查看 AI 走法示例")
+        print("3. 退出")
+        print("=" * 50)
+        
+        choice = input("请选择 (1/2/3)：").strip()
+        
+        if choice == '1':
+            play_gomoku_game()
+        elif choice == '2':
+            run_example()
+        elif choice == '3':
+            print("感谢使用！再见！")
+            break
+        else:
+            print("❌ 输入错误，请重新选择！")
+
+
 if __name__ == "__main__":
-    # 可选：运行原有示例
-    # board = GomokuBoard(size=15)
-    # ai = GomokuAI(size=15, time_limit=1.5)
-    # starting_moves = [(7, 7, BLACK), (7, 8, WHITE), (8, 7, BLACK), (8, 8, WHITE)]
-    # for row, col, player in starting_moves:
-    #     board.play(row, col, player)
-    # board.print_board()
-    # move = ai.best_move(board, BLACK)
-    # print(f"AI recommends move: {move}")
-
-    # 启动完整人机对战
-    play_gomoku_game()
+    main_menu()
