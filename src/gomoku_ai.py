@@ -18,12 +18,12 @@ DIRECTIONS = [(1, 0), (0, 1), (1, 1), (1, -1)]
 PATTERN_SCORES = {
     (5, 0): 1_000_000_000,
     (4, 0): 100_000_000,
-    (4, 1): 10_000_000,
-    (3, 0): 1_000_000,
-    (3, 1): 100_000,
-    (2, 0): 1_000,
-    (2, 1): 200,
-    (1, 0): 50,
+    (4, 1): 50_000_000,    # 提高冲四的分值，优先防守和进攻
+    (3, 0): 10_000_000,    # 提高活三的分值
+    (3, 1): 1_000_000,     # 提高冲三的分值
+    (2, 0): 100_000,
+    (2, 1): 10_000,
+    (1, 0): 1_000,
 }
 
 @dataclass(frozen=True)
@@ -155,13 +155,38 @@ class GomokuAI:
             score = self._move_heuristic(board, row, col, player)
             scored_moves.append(((row, col), score))
         scored_moves.sort(key=lambda item: item[1], reverse=True)
-        return [move for move, _ in scored_moves[:min(30, len(scored_moves))]]
+        return [move for move, _ in scored_moves[:min(30, len(scored_moves)))]
 
     def _move_heuristic(self, board: GomokuBoard, row: int, col: int, player: int) -> int:
+        """评估一个移动的启发值，包括赢棋检测和防守检测"""
+        opponent = self._opponent(player)
+        
+        # 1. 检查是否能直接赢棋
         board.grid[row][col] = player
-        score = self._evaluate_position(board, row, col, player)
+        if board.is_five_in_a_row(row, col):
+            board.grid[row][col] = EMPTY
+            return 1_000_000_000  # 赢棋，最高优先级
         board.grid[row][col] = EMPTY
-        return score
+        
+        # 2. 检查对方是否能在此位置赢棋（必须防守）
+        board.grid[row][col] = opponent
+        if board.is_five_in_a_row(row, col):
+            board.grid[row][col] = EMPTY
+            return 900_000_000  # 防守对方赢棋，次高优先级
+        board.grid[row][col] = EMPTY
+        
+        # 3. 评估该位置对自己的得分
+        board.grid[row][col] = player
+        own_score = self._evaluate_position(board, row, col, player)
+        board.grid[row][col] = EMPTY
+        
+        # 4. 评估该位置对对方的得分（防守价值）
+        board.grid[row][col] = opponent
+        opp_score = self._evaluate_position(board, row, col, opponent)
+        board.grid[row][col] = EMPTY
+        
+        # 综合得分：自己的得分 + 防守对方的权重（防守优先级更高）
+        return own_score + opp_score * 1.5
 
     def _alpha_beta(self, board: GomokuBoard, depth: int, alpha: float, beta: float, player: int):
         if self._timed_out():
