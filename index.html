@@ -212,15 +212,12 @@
     // 棋型打分（进攻分值）
     function getPatternScore(cnt, leftOpen, rightOpen, leftBlocked, rightBlocked) {
         if (cnt >= 5) return 1000000;   // 连五
-        // 活四：cnt===4 且两端至少有一个空，且没有被完全封锁
         if (cnt === 4) {
             if ((leftOpen>0 || rightOpen>0) && !(leftBlocked && rightBlocked)) return 300000;
-            else return 5000;   // 冲四（一端被堵但另一端开放）
+            else return 5000;
         }
         if (cnt === 3) {
-            // 活三：两端都有空位且至少一端开放（两端都未被完全封锁）
             if (leftOpen>0 && rightOpen>0 && !(leftBlocked && rightBlocked)) return 30000;
-            // 眠三：一端开放或完全封闭
             else if (leftOpen+rightOpen >=1) return 800;
             else return 200;
         }
@@ -240,7 +237,6 @@
             const {cnt, leftOpen, rightOpen, leftBlocked, rightBlocked} = getDirectionInfo(board, r, c, dx, dy, player);
             total += getPatternScore(cnt, leftOpen, rightOpen, leftBlocked, rightBlocked);
         }
-        // 中心偏好（鼓励抢占中央）
         const center = (BOARD_SIZE-1)/2;
         const dist = Math.abs(r-center) + Math.abs(c-center);
         const centerBonus = 500 / (dist + 3);
@@ -248,51 +244,45 @@
         return total;
     }
 
-    // ⭐ 新增：找到对方的关键威胁位置（活三/冲四会形成的地方）
+    // ⭐ 找到对方的关键��胁位置（活三/冲四会形成的地方）
     function findCriticalMoves(board, opponent) {
         const criticalMoves = [];
         const moves = board.getAllValidMoves();
         
         for (let [r, c] of moves) {
-            // 模拟对方在此位置落子
             board.grid[r][c] = opponent;
             let threatScore = 0;
             
             for (let [dx, dy] of DIRECTIONS) {
                 const {cnt, leftOpen, rightOpen, leftBlocked, rightBlocked} = getDirectionInfo(board, r, c, dx, dy, opponent);
-                // 活三：最高威胁
                 if (cnt === 3 && leftOpen > 0 && rightOpen > 0 && !(leftBlocked && rightBlocked)) {
-                    threatScore += 100000;  // 非常高的优先级
+                    threatScore += 100000;  // 活三
                 }
-                // 冲四：也很高的威胁
                 else if (cnt === 4) {
-                    threatScore += 50000;
+                    threatScore += 50000;  // 冲四
                 }
-                // 眠三：中等威胁
                 else if (cnt === 3) {
-                    threatScore += 5000;
+                    threatScore += 5000;   // 眠三
                 }
             }
             
-            board.grid[r][c] = EMPTY;  // 撤销模拟
+            board.grid[r][c] = EMPTY;
             
             if (threatScore > 0) {
                 criticalMoves.push({move: [r, c], threat: threatScore});
             }
         }
         
-        // 按威胁等级降序排列
         criticalMoves.sort((a, b) => b.threat - a.threat);
         return criticalMoves;
     }
 
-    // ⭐ 改进的启发式评估：更好地发现防守机会
+    // ⭐ 改进的启发式评估
     function heuristicEval(board, currentPlayer) {
         const opponent = currentPlayer === BLACK ? WHITE : BLACK;
         let myScore = 0;
         let oppThreat = 0;
         
-        // 1. 评估已有棋子
         for (let i=0;i<board.size;i++) {
             for (let j=0;j<board.size;j++) {
                 const c = board.grid[i][j];
@@ -302,13 +292,11 @@
             }
         }
         
-        // 2. ⭐ 提前发现对方的威胁：检查所有空位，看对方在哪里能形成活三/冲四
         const criticalMoves = findCriticalMoves(board, opponent);
         for (let {move: [r, c], threat} of criticalMoves) {
             oppThreat += threat;
         }
         
-        // 3. 防守权重非常高（2.5倍）- 促使AI优先防守
         let raw = (myScore - oppThreat * 2.5) / 1000000.0;
         return Math.max(-1.0, Math.min(1.0, raw));
     }
@@ -345,7 +333,6 @@
             let board = this.currentBoard.clone();
             let player = this.currentPlayer;
             const path = [];
-            // Selection
             while (node.expanded && node.children.length) {
                 node = this._selectBest(node);
                 path.push(node);
@@ -355,7 +342,6 @@
                 if (win !== null || board.isFull()) break;
                 player = (player === BLACK) ? WHITE : BLACK;
             }
-            // Evaluation
             let value = 0;
             const winner = board.getWinner();
             if (winner !== null) {
@@ -366,7 +352,6 @@
                 if (!node.expanded) this._expand(node, board, player);
                 value = heuristicEval(board, player);
             }
-            // Backpropagation
             for (let i=path.length-1; i>=0; i--) {
                 const n = path[i];
                 n.visits++;
@@ -388,36 +373,32 @@
             const moves = board.getAllValidMoves();
             if(moves.length===0) { node.expanded=true; return; }
             
-            // ⭐ 改进的优先级排序：必堵 > 进攻 > 其他
-            let criticalMoves = [];  // 对方的活三/冲四 - 必须堵
-            let offensiveMoves = [];  // 自己的活三/冲四 - 进攻
-            let normalMoves = [];     // 其他位置
+            let criticalMoves = [];
+            let offensiveMoves = [];
+            let normalMoves = [];
             
             for (let [r, c] of moves) {
-                let defensePriority = 0;  // 防守优先级
-                let offensePriority = 0;  // 进攻优先级
+                let defensePriority = 0;
+                let offensePriority = 0;
                 
-                // 检查对方在此是否能形成威胁
                 board.grid[r][c] = opponent;
                 for (let [dx, dy] of DIRECTIONS) {
                     const {cnt, leftOpen, rightOpen, leftBlocked, rightBlocked} = getDirectionInfo(board, r, c, dx, dy, opponent);
-                    if (cnt === 3 && leftOpen>0 && rightOpen>0 && !(leftBlocked && rightBlocked)) defensePriority = Math.max(defensePriority, 1000);  // 活三
-                    else if (cnt === 4) defensePriority = Math.max(defensePriority, 500);  // 冲四
-                    else if (cnt === 3) defensePriority = Math.max(defensePriority, 100);  // 眠三
+                    if (cnt === 3 && leftOpen>0 && rightOpen>0 && !(leftBlocked && rightBlocked)) defensePriority = Math.max(defensePriority, 1000);
+                    else if (cnt === 4) defensePriority = Math.max(defensePriority, 500);
+                    else if (cnt === 3) defensePriority = Math.max(defensePriority, 100);
                 }
                 board.grid[r][c] = EMPTY;
                 
-                // 检查自己在此是否能形成进攻机会
                 board.grid[r][c] = currentPlayer;
                 for (let [dx, dy] of DIRECTIONS) {
                     const {cnt, leftOpen, rightOpen, leftBlocked, rightBlocked} = getDirectionInfo(board, r, c, dx, dy, currentPlayer);
-                    if (cnt === 3 && leftOpen>0 && rightOpen>0 && !(leftBlocked && rightBlocked)) offensePriority = Math.max(offensePriority, 800);  // 活三
-                    else if (cnt === 4) offensePriority = Math.max(offensePriority, 400);  // 冲四
-                    else if (cnt === 3) offensePriority = Math.max(offensePriority, 80);   // 眠三
+                    if (cnt === 3 && leftOpen>0 && rightOpen>0 && !(leftBlocked && rightBlocked)) offensePriority = Math.max(offensePriority, 800);
+                    else if (cnt === 4) offensePriority = Math.max(offensePriority, 400);
+                    else if (cnt === 3) offensePriority = Math.max(offensePriority, 80);
                 }
                 board.grid[r][c] = EMPTY;
                 
-                // 分类
                 if (defensePriority >= 1000) {
                     criticalMoves.push({move: [r, c], priority: defensePriority + offensePriority});
                 } else if (offensePriority >= 800) {
@@ -427,12 +408,10 @@
                 }
             }
             
-            // 按优先级排序
             criticalMoves.sort((a, b) => b.priority - a.priority);
             offensiveMoves.sort((a, b) => b.priority - a.priority);
             normalMoves.sort((a, b) => b.priority - a.priority);
             
-            // 创建子节点：必堵优先级最高
             let totalPriority = 0;
             const allMoves = [...criticalMoves, ...offensiveMoves, ...normalMoves];
             for (let {move: mv, priority} of allMoves) {
@@ -461,11 +440,23 @@
     }
 
     class GomokuAI {
-        constructor(timeLimitMs=5000) {  // 默认5秒思考
+        constructor(timeLimitMs=5000) {
             this.timeLimitMs = timeLimitMs;
             this.searcher = new MCTSSearcher(1200, 1.4);
         }
         getBestMove(board, player) {
+            const opponent = player === BLACK ? WHITE : BLACK;
+            
+            // ⭐ 第一步：强制检查对方是否有活三，如果有直接堵住！
+            const threats = findCriticalMoves(board, opponent);
+            for (let {move, threat} of threats) {
+                if (threat >= 100000) {  // 活三的威胁值
+                    console.log('🛡️ 发现对方活三，直接堵住！', move);
+                    return move;  // 直接返回，不需要 MCTS 搜索
+                }
+            }
+            
+            // 第二步：如果没有必堵的活三，再用 MCTS 深度搜索
             this.searcher.setRoot(board, player);
             const start = performance.now();
             let sims = 0;
@@ -489,7 +480,7 @@
     let currentPlayer = BLACK;
     let gameOver = false;
     let winner = null;
-    let ai = new GomokuAI(5000);  // 5秒深度思考
+    let ai = new GomokuAI(5000);
     let isAIThinking = false;
     let lockMove = false;
     const cellSize = 600/BOARD_SIZE;
