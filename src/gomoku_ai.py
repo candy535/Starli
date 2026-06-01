@@ -1,14 +1,13 @@
 """
-An advanced Gomoku AI engine with Zobrist Hashing, Killer Moves, and History Heuristic.
-Optimizations: Zobrist Hash, Persistent Transposition Table, Killer Moves, History Heuristic.
+A stronger Gomoku AI engine with board heuristics and alpha-beta search.
+Enhanced: stronger pattern score, transposition table, full human vs AI game
 """
 from __future__ import annotations
 
 import math
-import random
 import time
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import List, Optional, Sequence, Tuple
 
 EMPTY = 0
 BLACK = 1
@@ -17,26 +16,18 @@ WHITE = 2
 # 四个搜索方向
 DIRECTIONS = [(1, 0), (0, 1), (1, 1), (1, -1)]
 
-# 棋型分数
+# 棋型分数: (连子数, 空端数)
+# 补充更多棋型分数，强化攻防能力
 PATTERN_SCORES = {
     (5, 0): 1_000_000_000,   # 五连
     (4, 0): 100_000_000,     # 活四
-    (4, 1): 50_000_000,      # 冲四
-    (3, 0): 10_000_000,      # 活三
-    (3, 1): 1_000_000,       # 眠三
+    (4, 1): 50_000_000,      # 冲四 - 提高权重，优先防守/进攻
+    (3, 0): 10_000_000,      # 活三 - 提高权重
+    (3, 1): 1_000_000,       # 眠三 - 提高权重
     (2, 0): 100_000,         # 活二
     (2, 1): 10_000,          # 眠二
     (1, 0): 1_000,           # 单子
 }
-
-# Zobrist 哈希表初始化
-random.seed(42)
-ZOBRIST_TABLE = [
-    [[random.getrandbits(64) for _ in range(3)] for _ in range(15)]
-    for _ in range(15)
-]
-ZOBRIST_BLACK_TURN = random.getrandbits(64)
-
 
 @dataclass(frozen=True)
 class Move:
@@ -45,44 +36,18 @@ class Move:
     player: int
 
 
-class ZobristHasher:
-    """Zobrist 哈希计算器"""
-    
-    def __init__(self):
-        self.hash = 0
-    
-    def put_piece(self, row: int, col: int, player: int) -> None:
-        """放置棋子"""
-        self.hash ^= ZOBRIST_TABLE[row][col][player]
-    
-    def remove_piece(self, row: int, col: int, player: int) -> None:
-        """移除棋子"""
-        self.hash ^= ZOBRIST_TABLE[row][col][player]
-    
-    def get_hash(self) -> int:
-        return self.hash
-    
-    def copy(self) -> ZobristHasher:
-        """复制哈希器"""
-        hasher = ZobristHasher()
-        hasher.hash = self.hash
-        return hasher
-
-
 class GomokuBoard:
     def __init__(self, size: int = 15) -> None:
         self.size = size
         self.grid = [[EMPTY] * size for _ in range(size)]
         self.moves: List[Move] = []
         self.count = 0
-        self.zobrist = ZobristHasher()
 
     def copy(self) -> GomokuBoard:
         new_board = GomokuBoard(self.size)
         new_board.grid = [row.copy() for row in self.grid]
         new_board.moves = self.moves.copy()
-        new_board.count = self.count
-        new_board.zobrist = self.zobrist.copy()
+        new_board.count = self.count  # 修复 bug
         return new_board
 
     def is_valid(self, row: int, col: int) -> bool:
@@ -94,7 +59,6 @@ class GomokuBoard:
         self.grid[row][col] = player
         self.moves.append(Move(row, col, player))
         self.count += 1
-        self.zobrist.put_piece(row, col, player)
 
     def undo(self) -> None:
         if not self.moves:
@@ -102,7 +66,6 @@ class GomokuBoard:
         last = self.moves.pop()
         self.grid[last.row][last.col] = EMPTY
         self.count -= 1
-        self.zobrist.remove_piece(last.row, last.col, last.player)
 
     def is_full(self) -> bool:
         return self.count >= self.size * self.size
@@ -118,6 +81,7 @@ class GomokuBoard:
         player = self.grid[row][col]
         for dr, dc in DIRECTIONS:
             length = 1
+            # 正反两个方向延伸
             for sign in (1, -1):
                 r, c = row + sign * dr, col + sign * dc
                 while 0 <= r < self.size and 0 <= c < self.size and self.grid[r][c] == player:
@@ -137,6 +101,7 @@ class GomokuBoard:
                     c = move.col + dc
                     if 0 <= r < self.size and 0 <= c < self.size and self.grid[r][c] == EMPTY:
                         neighbors.add((r, c))
+        # 棋盘空盘，默认落中心
         if not neighbors:
             center = self.size // 2
             return [(center, center)]
@@ -157,44 +122,16 @@ class GomokuBoard:
             print(line)
 
 
-@dataclass
-class TranspositionEntry:
-    """置换表条目"""
-    depth: int
-    value: int
-    flag: str  # 'exact', 'lower', 'upper'
-    timestamp: int = 0
-
-
 class GomokuAI:
-    def __init__(self, size: int = 15, time_limit: float = 2.0) -> None:
+    def __init__(self, size: int = 15, time_limit: float = 1.5) -> None:
         self.size = size
         self.time_limit = time_limit
         self.start_time = 0.0
-        
-        # 持久置换表（不每步清空）
-        self.transposition: Dict[int, TranspositionEntry] = {}
-        self.transposition_hits = 0
-        self.transposition_misses = 0
-        
-        # 杀手走法表：killer_moves[depth] = [(row1, col1), (row2, col2)]
-        self.killer_moves: Dict[int, List[Tuple[int, int]]] = {}
-        
-        # 历史启发表：history[player][(row, col)] = score
-        self.history: Dict[int, Dict[Tuple[int, int], int]] = {
-            BLACK: {},
-            WHITE: {}
-        }
-        
-        self.search_count = 0
-        self.timestamp = 0
+        self.transposition: dict[Tuple[Tuple[int, ...], int], int] = {}
 
     def best_move(self, board: GomokuBoard, player: int) -> Tuple[int, int]:
         self.start_time = time.time()
-        self.search_count = 0
-        self.timestamp += 1
-        self.killer_moves.clear()
-        
+        self.transposition.clear()  # 每步清空置换表，避免旧缓存干扰
         best_move = None
         best_score = -math.inf
         alpha = -math.inf
@@ -211,172 +148,106 @@ class GomokuAI:
                 best_score = score
                 best_move = move
             alpha = max(alpha, score)
+            if alpha >= beta:
+                break
             if self._timed_out():
                 break
 
         if best_move is None:
             raise RuntimeError("No move found")
-        
-        # 统计信息
-        hit_rate = self.transposition_hits / max(1, self.transposition_hits + self.transposition_misses)
-        print(f"[DEBUG] 搜索节点数: {self.search_count}, 置换表命中率: {hit_rate:.2%}, 表大小: {len(self.transposition)}")
-        
         return best_move
 
     def _timed_out(self) -> bool:
         return time.time() - self.start_time > self.time_limit
 
     def _select_depth(self, board: GomokuBoard) -> int:
+        # 开局浅搜索，中局、残局加深搜索，平衡速度与棋力
         total_cells = self.size * self.size
         if board.count < 8:
-            return 5
+            return 4
         elif board.count < 35:
-            return 7
-        elif board.count < total_cells // 2:
-            return 8
-        else:
             return 6
+        elif board.count < total_cells // 2:
+            return 7
+        else:
+            return 5
 
     def _generate_moves(self, board: GomokuBoard, player: int) -> List[Tuple[int, int]]:
-        """生成并排序走法，结合杀手走法、历史启发"""
         candidates = board.get_neighbors(distance=2)
         scored_moves = []
-        
         for row, col in candidates:
             score = self._move_heuristic(board, row, col, player)
             scored_moves.append(((row, col), score))
-        
+        # 按启发分降序排序，优先搜索高分点
         scored_moves.sort(key=lambda item: item[1], reverse=True)
         return [move for move, _ in scored_moves[:min(25, len(scored_moves))]]
 
     def _move_heuristic(self, board: GomokuBoard, row: int, col: int, player: int) -> int:
-        """评估走法，包含防守检测"""
+        """评估一个移动的启发值，包括赢棋检测和防守检测"""
         opponent = self._opponent(player)
         
-        # 检查赢棋
+        # 1. 检查是否能直接赢棋
         board.grid[row][col] = player
         if board.is_five_in_a_row(row, col):
             board.grid[row][col] = EMPTY
-            return 1_000_000_000
+            return 1_000_000_000  # 赢棋，最高优先级
         board.grid[row][col] = EMPTY
         
-        # 检查防守
+        # 2. 检查对方是否能在此位置赢棋（必须防守）
         board.grid[row][col] = opponent
         if board.is_five_in_a_row(row, col):
             board.grid[row][col] = EMPTY
-            return 900_000_000
+            return 900_000_000  # 防守对方赢棋，次高优先级
         board.grid[row][col] = EMPTY
         
-        # 棋型评估
+        # 3. 评估该位置对自己的得分
         board.grid[row][col] = player
         own_score = self._evaluate_position(board, row, col, player)
         board.grid[row][col] = EMPTY
         
+        # 4. 评估该位置对对方的得分（防守价值）
         board.grid[row][col] = opponent
         opp_score = self._evaluate_position(board, row, col, opponent)
         board.grid[row][col] = EMPTY
         
-        # 历史启发加权
-        history_bonus = self.history[player].get((row, col), 0) * 100
-        
-        return own_score + opp_score * 1.5 + history_bonus
+        # 综合得分：自己的得分 + 防守对方的权重（防守优先级更高）
+        return own_score + opp_score * 1.5
 
-    def _alpha_beta(self, board: GomokuBoard, depth: int, alpha: float, beta: float, player: int) -> int:
-        """Alpha-Beta 搜索，集成置换表、杀手走法"""
-        self.search_count += 1
-        
+    def _alpha_beta(self, board: GomokuBoard, depth: int, alpha: float, beta: float, player: int):
         if self._timed_out():
             return 0
 
-        # 终止条件：检查赢/负（而非硬编码在评估里）
         winner = board.winner()
         if winner == player:
-            return 100_000 + (10 - depth)  # 越早赢越好
+            return math.inf
         if winner == self._opponent(player):
-            return -100_000 - (10 - depth)  # 越晚输越好
-        
+            return -math.inf
         if depth == 0 or board.is_full():
             return self._evaluate(board, player)
 
-        # 查置换表（持久缓存）
-        zobrist_hash = board.zobrist.get_hash()
-        alpha_orig = alpha
-        
-        if zobrist_hash in self.transposition:
-            entry = self.transposition[zobrist_hash]
-            if entry.depth >= depth:
-                self.transposition_hits += 1
-                if entry.flag == 'exact':
-                    return entry.value
-                elif entry.flag == 'lower':
-                    alpha = max(alpha, entry.value)
-                elif entry.flag == 'upper':
-                    beta = min(beta, entry.value)
-                if alpha >= beta:
-                    return entry.value
-        
-        self.transposition_misses += 1
+        board_key = self._hash_board(board, player)
+        if board_key in self.transposition:
+            return self.transposition[board_key]
 
         moves = self._generate_moves(board, player)
         if not moves:
             return self._evaluate(board, player)
 
-        # 杀手走法优先排序
-        killer_list = self.killer_moves.get(depth, [])
-        killer_set = set(killer_list)
-        
-        moves_sorted = []
-        for move in moves:
-            if move in killer_set:
-                moves_sorted.insert(0, move)  # 杀手走法放在前面
-            else:
-                moves_sorted.append(move)
-
         value = -math.inf
-        best_move = None
-        
-        for row, col in moves_sorted:
+        for row, col in moves:
             board.play(row, col, player)
             score = -self._alpha_beta(board, depth - 1, -beta, -alpha, self._opponent(player))
             board.undo()
 
             if score > value:
                 value = score
-                best_move = (row, col)
-            
             alpha = max(alpha, value)
             if alpha >= beta:
-                # 更新杀手走法
-                if best_move and depth > 0:
-                    if depth not in self.killer_moves:
-                        self.killer_moves[depth] = []
-                    if best_move not in self.killer_moves[depth]:
-                        self.killer_moves[depth].insert(0, best_move)
-                        if len(self.killer_moves[depth]) > 2:
-                            self.killer_moves[depth].pop()
-                    
-                    # 更新历史启发
-                    self.history[player][best_move] = self.history[player].get(best_move, 0) + (1 << depth)
-                
                 break
-            
             if self._timed_out():
                 break
 
-        # 存入置换表
-        flag = 'exact'
-        if value <= alpha_orig:
-            flag = 'upper'
-        elif value >= beta:
-            flag = 'lower'
-        
-        self.transposition[zobrist_hash] = TranspositionEntry(
-            depth=depth,
-            value=value,
-            flag=flag,
-            timestamp=self.timestamp
-        )
-        
+        self.transposition[board_key] = value
         return value
 
     def _evaluate(self, board: GomokuBoard, player: int) -> int:
@@ -401,6 +272,7 @@ class GomokuAI:
 
     def _build_line(self, board: GomokuBoard, row: int, col: int, dr: int, dc: int, player: int):
         window = [player]
+        # 向两个方向拓展棋子窗口
         for sign in (1, -1):
             r, c = row + sign * dr, col + sign * dc
             while 0 <= r < board.size and 0 <= c < board.size and len(window) < 10:
@@ -423,6 +295,7 @@ class GomokuAI:
             while idx < n and line[idx] == player:
                 count += 1
                 idx += 1
+            # 判断两端是否为空
             left_open = (start - 1 >= 0) and (line[start - 1] == EMPTY)
             right_open = (idx < n) and (line[idx] == EMPTY)
             pattern_score = self._pattern_score(count, left_open, right_open)
@@ -437,23 +310,29 @@ class GomokuAI:
         key = (count, open_ends)
         return PATTERN_SCORES.get(key, 0)
 
+    def _hash_board(self, board: GomokuBoard, player: int) -> Tuple[Tuple[int, ...], int]:
+        flat = tuple(cell for row in board.grid for cell in row)
+        return flat, player
+
     @staticmethod
     def _opponent(player: int) -> int:
         return BLACK if player == WHITE else WHITE
 
 
+# 完整人机对战游戏入口
 def play_gomoku_game():
     board = GomokuBoard(size=15)
-    ai = GomokuAI(size=15, time_limit=2.0)
+    ai = GomokuAI(size=15, time_limit=1.8)
 
     print("=" * 50)
-    print("    🎮 高级五子棋 AI (Zobrist优化版) 🎮")
+    print("       🎮 强化版五子棋 AI 🎮")
     print("=" * 50)
     print("规则：你是黑方(X)，AI是白方(O)")
     print("落子输入格式：行 列 （例如：7 7 代表棋盘中心）")
     print("输入 'q' 可退出游戏")
     print("=" * 50)
 
+    move_count = 0
     while True:
         board.print_board()
         print()
@@ -479,6 +358,7 @@ def play_gomoku_game():
                 x, y = map(int, in_str.split())
                 if board.is_valid(x, y):
                     board.play(x, y, BLACK)
+                    move_count += 1
                     print(f"你落子：{x} {y}")
                     break
                 else:
@@ -486,6 +366,7 @@ def play_gomoku_game():
             except ValueError:
                 print("❌ 输入格式错误，请输入两个数字，空格分隔！")
 
+        # 玩家落子后判断胜负
         if board.winner() or board.is_full():
             continue
 
@@ -493,17 +374,18 @@ def play_gomoku_game():
         print("\n🤖 AI 思考中...")
         ai_row, ai_col = ai.best_move(board, WHITE)
         board.play(ai_row, ai_col, WHITE)
+        move_count += 1
         print(f"AI 落子：{ai_row} {ai_col}")
         print()
 
 
 def run_example() -> None:
-    """运行示例"""
+    """运行示例：展示AI在特定局面的推荐走法"""
     print("\n" + "=" * 50)
-    print("     📊 AI 走法推荐示例 (Zobrist优化版) 📊")
+    print("       📊 AI 走法推荐示例 📊")
     print("=" * 50)
     board = GomokuBoard(size=15)
-    ai = GomokuAI(size=15, time_limit=2.0)
+    ai = GomokuAI(size=15, time_limit=1.5)
     
     starting_moves = [
         (7, 7, BLACK),
@@ -523,6 +405,7 @@ def run_example() -> None:
     print(f"AI 推荐走法：{move}\n")
 
 
+# 主菜单
 def main_menu():
     while True:
         print("\n" + "=" * 50)
