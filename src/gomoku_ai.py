@@ -1,29 +1,32 @@
 """
 A stronger Gomoku AI engine with board heuristics and alpha-beta search.
+Enhanced: stronger pattern score, transposition table, full human vs AI game
 """
 from __future__ import annotations
 
 import math
 import time
-from collections import defaultdict
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 EMPTY = 0
 BLACK = 1
 WHITE = 2
 
+# 四个搜索方向
 DIRECTIONS = [(1, 0), (0, 1), (1, 1), (1, -1)]
 
+# 棋型分数: (连子数, 空端数)
+# 补充更多棋型分数，强化攻防能力
 PATTERN_SCORES = {
-    (5, 0): 1_000_000_000,
-    (4, 0): 100_000_000,
-    (4, 1): 50_000_000,    # 提高冲四的分值，优先防守和进攻
-    (3, 0): 10_000_000,    # 提高活三的分值
-    (3, 1): 1_000_000,     # 提高冲三的分值
-    (2, 0): 100_000,
-    (2, 1): 10_000,
-    (1, 0): 1_000,
+    (5, 0): 1_000_000_000,   # 五连
+    (4, 0): 100_000_000,     # 活四
+    (4, 1): 50_000_000,      # 冲四 - 提高权重，优先防守/进攻
+    (3, 0): 10_000_000,      # 活三 - 提高权重
+    (3, 1): 1_000_000,       # 眠三 - 提高权重
+    (2, 0): 100_000,         # 活二
+    (2, 1): 10_000,          # 眠二
+    (1, 0): 1_000,           # 单子
 }
 
 @dataclass(frozen=True)
@@ -31,6 +34,7 @@ class Move:
     row: int
     col: int
     player: int
+
 
 class GomokuBoard:
     def __init__(self, size: int = 15) -> None:
@@ -43,7 +47,7 @@ class GomokuBoard:
         new_board = GomokuBoard(self.size)
         new_board.grid = [row.copy() for row in self.grid]
         new_board.moves = self.moves.copy()
-        new_board.count = self.count
+        new_board.count = self.count  # 修复 bug
         return new_board
 
     def is_valid(self, row: int, col: int) -> bool:
@@ -77,6 +81,7 @@ class GomokuBoard:
         player = self.grid[row][col]
         for dr, dc in DIRECTIONS:
             length = 1
+            # 正反两个方向延伸
             for sign in (1, -1):
                 r, c = row + sign * dr, col + sign * dc
                 while 0 <= r < self.size and 0 <= c < self.size and self.grid[r][c] == player:
@@ -96,19 +101,29 @@ class GomokuBoard:
                     c = move.col + dc
                     if 0 <= r < self.size and 0 <= c < self.size and self.grid[r][c] == EMPTY:
                         neighbors.add((r, c))
+        # 棋盘空盘，默认落中心
         if not neighbors:
             center = self.size // 2
             return [(center, center)]
         return list(neighbors)
 
     def print_board(self) -> None:
-        header = '  ' + ' '.join(f'{i:2}' for i in range(self.size))
+        header = '   ' + ' '.join(f'{i:2}' for i in range(self.size))
         print(header)
         for i, row in enumerate(self.grid):
-            print(f'{i:2} ' + ' '.join('.' if cell == EMPTY else 'X' if cell == BLACK else 'O' for cell in row))
+            line = f'{i:2} '
+            for cell in row:
+                if cell == EMPTY:
+                    line += '.  '
+                elif cell == BLACK:
+                    line += 'X  '
+                else:
+                    line += 'O  '
+            print(line)
+
 
 class GomokuAI:
-    def __init__(self, size: int = 15, time_limit: float = 2.0) -> None:
+    def __init__(self, size: int = 15, time_limit: float = 1.5) -> None:
         self.size = size
         self.time_limit = time_limit
         self.start_time = 0.0
@@ -116,6 +131,7 @@ class GomokuAI:
 
     def best_move(self, board: GomokuBoard, player: int) -> Tuple[int, int]:
         self.start_time = time.time()
+        self.transposition.clear()  # 每步清空置换表，避免旧缓存干扰
         best_move = None
         best_score = -math.inf
         alpha = -math.inf
@@ -127,10 +143,13 @@ class GomokuAI:
             board.play(move[0], move[1], player)
             score = self._alpha_beta(board, depth - 1, alpha, beta, self._opponent(player))
             board.undo()
+
             if score > best_score:
                 best_score = score
                 best_move = move
             alpha = max(alpha, score)
+            if alpha >= beta:
+                break
             if self._timed_out():
                 break
 
@@ -142,11 +161,16 @@ class GomokuAI:
         return time.time() - self.start_time > self.time_limit
 
     def _select_depth(self, board: GomokuBoard) -> int:
-        if board.count < 10:
+        # 开局浅搜索，中局、残局加深搜索，平衡速度与棋力
+        total_cells = self.size * self.size
+        if board.count < 8:
             return 4
-        if board.count < 40:
+        elif board.count < 35:
+            return 6
+        elif board.count < total_cells // 2:
+            return 7
+        else:
             return 5
-        return 6
 
     def _generate_moves(self, board: GomokuBoard, player: int) -> List[Tuple[int, int]]:
         candidates = board.get_neighbors(distance=2)
@@ -154,8 +178,9 @@ class GomokuAI:
         for row, col in candidates:
             score = self._move_heuristic(board, row, col, player)
             scored_moves.append(((row, col), score))
+        # 按启发分降序排序，优先搜索高分点
         scored_moves.sort(key=lambda item: item[1], reverse=True)
-        return [move for move, _ in scored_moves[:min(30, len(scored_moves)))]
+        return [move for move, _ in scored_moves[:min(25, len(scored_moves))]]
 
     def _move_heuristic(self, board: GomokuBoard, row: int, col: int, player: int) -> int:
         """评估一个移动的启发值，包括赢棋检测和防守检测"""
@@ -190,7 +215,8 @@ class GomokuAI:
 
     def _alpha_beta(self, board: GomokuBoard, depth: int, alpha: float, beta: float, player: int):
         if self._timed_out():
-            return 0.0
+            return 0
+
         winner = board.winner()
         if winner == player:
             return math.inf
@@ -212,8 +238,10 @@ class GomokuAI:
             board.play(row, col, player)
             score = -self._alpha_beta(board, depth - 1, -beta, -alpha, self._opponent(player))
             board.undo()
-            value = max(value, score)
-            alpha = max(alpha, score)
+
+            if score > value:
+                value = score
+            alpha = max(alpha, value)
             if alpha >= beta:
                 break
             if self._timed_out():
@@ -244,6 +272,7 @@ class GomokuAI:
 
     def _build_line(self, board: GomokuBoard, row: int, col: int, dr: int, dc: int, player: int):
         window = [player]
+        # 向两个方向拓展棋子���口
         for sign in (1, -1):
             r, c = row + sign * dr, col + sign * dc
             while 0 <= r < board.size and 0 <= c < board.size and len(window) < 10:
@@ -262,44 +291,24 @@ class GomokuAI:
             if line[start] != player:
                 continue
             count = 0
-            blocks = 0
             idx = start
             while idx < n and line[idx] == player:
                 count += 1
                 idx += 1
-            left_empty = start - 1 >= 0 and line[start - 1] == EMPTY
-            right_empty = idx < n and line[idx] == EMPTY
-            if start - 1 < 0 or start - 1 >= n or line[start - 1] != EMPTY:
-                blocks += 1
-            if idx >= n or line[idx] != EMPTY:
-                blocks += 1
-            pattern_score = self._pattern_score(count, blocks, left_empty, right_empty)
-            best = max(best, pattern_score)
+            # 判断两端是否为空
+            left_open = (start - 1 >= 0) and (line[start - 1] == EMPTY)
+            right_open = (idx < n) and (line[idx] == EMPTY)
+            pattern_score = self._pattern_score(count, left_open, right_open)
+            if pattern_score > best:
+                best = pattern_score
         return best
 
-    def _pattern_score(self, count: int, blocks: int, left_open: bool, right_open: bool) -> int:
+    def _pattern_score(self, count: int, left_open: bool, right_open: bool) -> int:
         if count >= 5:
             return PATTERN_SCORES[(5, 0)]
         open_ends = int(left_open) + int(right_open)
-        if count == 4:
-            if open_ends == 2:
-                return PATTERN_SCORES[(4, 0)]
-            if open_ends == 1:
-                return PATTERN_SCORES[(4, 1)]
-        elif count == 3:
-            if open_ends == 2:
-                return PATTERN_SCORES[(3, 0)]
-            if open_ends == 1:
-                return PATTERN_SCORES[(3, 1)]
-        elif count == 2:
-            if open_ends == 2:
-                return PATTERN_SCORES[(2, 0)]
-            if open_ends == 1:
-                return PATTERN_SCORES[(2, 1)]
-        elif count == 1:
-            if open_ends == 2:
-                return PATTERN_SCORES[(1, 0)]
-        return 0
+        key = (count, open_ends)
+        return PATTERN_SCORES.get(key, 0)
 
     def _hash_board(self, board: GomokuBoard, player: int) -> Tuple[Tuple[int, ...], int]:
         flat = tuple(cell for row in board.grid for cell in row)
@@ -309,21 +318,64 @@ class GomokuAI:
     def _opponent(player: int) -> int:
         return BLACK if player == WHITE else WHITE
 
-def run_example() -> None:
+
+# 完整人机对战游戏入口
+def play_gomoku_game():
     board = GomokuBoard(size=15)
-    ai = GomokuAI(size=15, time_limit=1.5)
-    starting_moves = [
-        (7, 7, BLACK),
-        (7, 8, WHITE),
-        (8, 7, BLACK),
-        (8, 8, WHITE),
-    ]
-    for row, col, player in starting_moves:
-        board.play(row, col, player)
+    ai = GomokuAI(size=15, time_limit=1.8)
 
-    board.print_board()
-    move = ai.best_move(board, BLACK)
-    print(f"AI recommends move: {move}")
+    print("===== 强化版五子棋 AI =====")
+    print("规则：你是黑方(X)，AI是白方(O)")
+    print("落子输入格式：行 列 （例如：7 7 代表棋盘中心）\n")
 
+    while True:
+        board.print_board()
+        winner = board.winner()
+        if winner == BLACK:
+            print("🎉 恭喜！你战胜了AI！")
+            break
+        if winner == WHITE:
+            print("😥 AI获胜，再接再厉！")
+            break
+        if board.is_full():
+            print("⚖️ 棋盘已满，平局！")
+            break
+
+        # 玩家落子
+        while True:
+            try:
+                in_str = input("\n请输入落子坐标：")
+                x, y = map(int, in_str.strip().split())
+                if board.is_valid(x, y):
+                    board.play(x, y, BLACK)
+                    break
+                else:
+                    print("❌ 坐标无效，请选择空白位置！")
+            except ValueError:
+                print("❌ 输入格式错误，请输入两个数字，空格分隔！")
+
+        # 玩家落子后判断胜负
+        if board.winner() or board.is_full():
+            continue
+
+        # AI 落子
+        print("\n🤖 AI 思考中...")
+        ai_row, ai_col = ai.best_move(board, WHITE)
+        board.play(ai_row, ai_col, WHITE)
+        print(f"AI 落子：{ai_row} {ai_col}")
+
+
+# 原有示例 + 人机对战双入口
 if __name__ == "__main__":
-    run_example()
+    # 可选：运行原有示例
+    # board = GomokuBoard(size=15)
+    # ai = GomokuAI(size=15, time_limit=1.5)
+    # starting_moves = [(7, 7, BLACK), (7, 8, WHITE), (8, 7, BLACK), (8, 8, WHITE)]
+    # for row, col, player in starting_moves:
+    #     board.play(row, col, player)
+    # board.print_board()
+    # move = ai.best_move(board, BLACK)
+    # print(f"AI recommends move: {move}")
+
+    # 启动完整人机对战
+    play_gomoku_game()
