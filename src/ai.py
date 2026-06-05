@@ -1,4 +1,6 @@
 import random
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 class IllegalMoveError(ValueError):
     pass
@@ -123,3 +125,32 @@ def ai_get_move():
     y=gs.board.loc_y(pos)
     gs.play(gs.board.pla,pos)
     return x,y
+
+# HTTP接口服务
+class GameHandler(BaseHTTPRequestHandler):
+    def _set_header(self):
+        self.send_response(200)
+        self.send_header("Content-Type","application/json;charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin","*")
+        self.end_headers()
+
+    def do_POST(self):
+        if self.path=="/human":
+            length=int(self.headers["Content-Length"])
+            body=json.loads(self.rfile.read(length))
+            x=int(body["x"])
+            y=int(body["y"])
+            human_put(x,y)
+            self._set_header()
+            self.wfile.write(json.dumps({"ok":1}).encode())
+
+    def do_GET(self):
+        if self.path=="/ai":
+            ax,ay=ai_get_move()
+            self._set_header()
+            self.wfile.write(json.dumps({"x":ax,"y":ay}).encode())
+
+if __name__=="__main__":
+    server=HTTPServer(("127.0.0.1",5000),GameHandler)
+    print("服务启动：http://127.0.0.1:5000")
+    server.serve_forever()
