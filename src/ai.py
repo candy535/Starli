@@ -20,8 +20,15 @@ def ai_get_move(is_black=True):
     y = gs.board.loc_y(pos)
     return x,y
 
-# 本地测试代码
+# 控制台交互式下棋（原生无依赖，直接运行就能手动下棋）
 if __name__ == "__main__":
-    human_put(7,7)    # 人下天元(7,7)
-    ax,ay = ai_get_move()
-    print("AI落子坐标：",ax,ay)
+    print("✅ KataGo五子棋AI启动 | 输入格式：x  y（空格分隔，例：7 7）")
+    while True:
+        try:
+            user_input = input("请输入你的落子坐标：")
+            x, y = map(int, user_input.strip().split())
+            human_put(x, y)
+            ax, ay = ai_get_move()
+            print(f"🤖 AI落子：{ax} , {ay}\n")
+        except:
+            print("❌ 输入格式错误！请输入两个数字，中间空格隔开\n")
